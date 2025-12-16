@@ -1,0 +1,14 @@
+playwright==1.44.0
+supabase>=2.0.0,<3.0.0
+requests==2.31.0
+opencv-python-headless==4.9.0.80
+numpy<2 # Explicitly request NumPy 1.x for OpenCV compatibility
+python-dotenv==1.0.1
+google-generativeai==0.7.0
+selenium
+webdriver-manager
+reportlab
+python-docx
+Pillow
+pyautogui
+pygetwindow
