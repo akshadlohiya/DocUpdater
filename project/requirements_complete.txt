@@ -1,0 +1,33 @@
+# Core Frameworks
+uvicorn
+fastapi
+pydantic
+python-dotenv
+python-multipart
+
+# PDF Processing
+pymupdf
+weasyprint
+reportlab
+xhtml2pdf
+PyPDF2
+pdf2image
+
+# Image Processing
+Pillow
+scikit-image
+numpy
+imagehash
+
+# Generative AI & APIs
+groq
+google-genai
+
+# System & GUI Automation
+pyautogui
+psutil
+pywin32
+
+# Utilities
+markdown
+PyJWT

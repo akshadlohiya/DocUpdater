@@ -1,0 +1,17 @@
+uvicorn
+fastapi
+pydantic
+weasyprint
+markdown
+pdf2image
+scikit-image
+groq
+Pillow
+google-genai
+pyautogui
+psutil
+pywin32
+PyJWT
+python-dotenv
+PyPDF2
+reportlab

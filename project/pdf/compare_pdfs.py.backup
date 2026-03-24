@@ -1,0 +1,693 @@
+"""
+PDF Comparison Module
+Compares two PDFs by unflattening them and comparing images.
+Workflow:
+1. Unflatten both PDFs using unflaten.py
+2. Extract images from both PDFs
+3. Compare images and generate report
+"""
+
+import os
+import sys
+import tempfile
+import shutil
+import base64
+from pathlib import Path
+from datetime import datetime
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from unflaten import unflatten_pdf
+from imagecompare import extract_and_save_images, replace_by_page_and_position
+
+
+def compare_pdfs(pdf1_path, pdf2_path):
+    """
+    Compare two PDFs by unflattening and replacing images.
+    Generates a detailed log of changes showing what was modified.
+    
+    Args:
+        pdf1_path (str): Path to first PDF (old/base)
+        pdf2_path (str): Path to second PDF (new/updated)
+        
+    Returns:
+        dict: Comparison results with details
+    """
+    try:
+        if not os.path.exists(pdf1_path):
+            return {"success": False, "error": f"PDF 1 not found: {pdf1_path}"}
+        
+        if not os.path.exists(pdf2_path):
+            return {"success": False, "error": f"PDF 2 not found: {pdf2_path}"}
+        
+        # Create temporary directory for processing
+        temp_dir = tempfile.mkdtemp(prefix="pdf_compare_")
+        log_file_path = os.path.join(temp_dir, "comparison_log.txt")
+        
+        # Initialize log
+        log_lines = []
+        log_lines.append(f"PDF COMPARISON CHANGE LOG")
+        log_lines.append("=" * 80)
+        log_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        log_lines.append("")
+        log_lines.append(f"OLD PDF (Version 1): {os.path.basename(pdf1_path)}")
+        log_lines.append(f"NEW PDF (Version 2): {os.path.basename(pdf2_path)}")
+        log_lines.append("=" * 80)
+        log_lines.append("")
+        
+        try:
+            # Create subdirectories for image extraction
+            unflattened_dir = os.path.join(temp_dir, "unflattened")
+            extracted_dir = os.path.join(temp_dir, "extracted")
+            comparison_dir = os.path.join(temp_dir, "comparison")
+            
+            os.makedirs(unflattened_dir)
+            os.makedirs(extracted_dir)
+            os.makedirs(comparison_dir)
+            
+            print(f"[PDF Compare] Created temp directory: {temp_dir}")
+            
+            # Step 1: Unflatten both PDFs
+            log_lines.append(f"STEP 1: PDF PROCESSING")
+            log_lines.append("-" * 80)
+            
+            unflattened_pdf1 = os.path.join(unflattened_dir, "pdf1_unflattened.pdf")
+            unflattened_pdf2 = os.path.join(unflattened_dir, "pdf2_unflattened.pdf")
+            
+            print(f"[PDF Compare] Unflattening PDF 1...")
+            unflatten_pdf(pdf1_path, unflattened_pdf1)
+            log_lines.append("✓ Old PDF unflattened successfully")
+            
+            print(f"[PDF Compare] Unflattening PDF 2...")
+            unflatten_pdf(pdf2_path, unflattened_pdf2)
+            log_lines.append("✓ New PDF unflattened successfully")
+            log_lines.append("")
+            
+            # Step 2: Extract images and analyze changes
+            log_lines.append(f"STEP 2: IMAGE EXTRACTION & CHANGE DETECTION")
+            log_lines.append("-" * 80)
+            
+            extracted_pdf1_dir = os.path.join(extracted_dir, "pdf1_images")
+            extracted_pdf2_dir = os.path.join(extracted_dir, "pdf2_images")
+            
+            print(f"[PDF Compare] Extracting images from PDF 1...")
+            pdf1_img_count = extract_and_save_images(unflattened_pdf1, extracted_pdf1_dir)
+            log_lines.append(f"✓ Extracted {pdf1_img_count} images from Old PDF")
+            
+            print(f"[PDF Compare] Extracting images from PDF 2...")
+            pdf2_img_count = extract_and_save_images(unflattened_pdf2, extracted_pdf2_dir)
+            log_lines.append(f"✓ Extracted {pdf2_img_count} images from New PDF")
+            log_lines.append("")
+            
+            # Step 3: Analyze changes
+            log_lines.append(f"STEP 3: CHANGE ANALYSIS")
+            log_lines.append("-" * 80)
+            
+            changes_detected = 0
+            
+            # Get list of images from both PDFs
+            pdf1_images = sorted(os.listdir(extracted_pdf1_dir)) if os.path.exists(extracted_pdf1_dir) else []
+            pdf2_images = sorted(os.listdir(extracted_pdf2_dir)) if os.path.exists(extracted_pdf2_dir) else []
+            
+            max_images = max(len(pdf1_images), len(pdf2_images))
+            
+            if max_images == 0:
+                log_lines.append("⚠ No images found in PDFs")
+            else:
+                log_lines.append(f"Comparing {max_images} images across both PDFs...")
+                log_lines.append("")
+                
+                for i in range(max_images):
+                    img1_path = os.path.join(extracted_pdf1_dir, pdf1_images[i]) if i < len(pdf1_images) else None
+                    img2_path = os.path.join(extracted_pdf2_dir, pdf2_images[i]) if i < len(pdf2_images) else None
+                    
+                    img_num = i + 1
+                    
+                    if img1_path and img2_path and os.path.exists(img1_path) and os.path.exists(img2_path):
+                        # Compare images
+                        try:
+                            from PIL import Image
+                            import imagehash
+                            
+                            img1 = Image.open(img1_path)
+                            img2 = Image.open(img2_path)
+                            
+                            # Calculate image hashes for comparison
+                            hash1 = imagehash.average_hash(img1)
+                            hash2 = imagehash.average_hash(img2)
+                            
+                            # Calculate similarity (0 = identical, higher = more different)
+                            difference = hash1 - hash2
+                            
+                            if difference == 0:
+                                log_lines.append(f"✓ Image {img_num}: UNCHANGED")
+                            else:
+                                changes_detected += 1
+                                log_lines.append(f"✗ Image {img_num}: CHANGED (Difference score: {difference})")
+                                log_lines.append(f"    Old: {os.path.getsize(img1_path)} bytes | New: {os.path.getsize(img2_path)} bytes")
+                        except Exception as e:
+                            log_lines.append(f"⚠ Image {img_num}: Could not analyze - {str(e)}")
+                    elif img1_path and os.path.exists(img1_path):
+                        changes_detected += 1
+                        log_lines.append(f"✗ Image {img_num}: DELETED (removed in new PDF)")
+                    elif img2_path and os.path.exists(img2_path):
+                        changes_detected += 1
+                        log_lines.append(f"✗ Image {img_num}: ADDED (new in updated PDF)")
+                
+                log_lines.append("")
+            
+            # Step 4: Create comparison PDF
+            log_lines.append(f"STEP 4: COMPARISON PDF GENERATION")
+            log_lines.append("-" * 80)
+            
+            comparison_pdf = os.path.join(comparison_dir, "comparison_result.pdf")
+            
+            print(f"[PDF Compare] Creating comparison with image replacement...")
+            replace_by_page_and_position(
+                unflattened_pdf1,
+                unflattened_pdf2,
+                comparison_pdf,
+                start_page=None,
+                end_page=None
+            )
+            
+            log_lines.append(f"✓ Comparison PDF created with image overlays")
+            log_lines.append(f"  Note: Images from new PDF were overlaid on old PDF for visual comparison")
+            log_lines.append("")
+            
+            # Verify the output PDF
+            if not os.path.exists(comparison_pdf):
+                raise Exception("Comparison PDF was not created")
+            
+            file_size = os.path.getsize(comparison_pdf)
+            if file_size == 0:
+                raise Exception("Comparison PDF is empty")
+            
+            # Step 5: Summary
+            log_lines.append(f"SUMMARY OF CHANGES")
+            log_lines.append("=" * 80)
+            log_lines.append(f"Total images analyzed: {max_images}")
+            log_lines.append(f"Images changed: {changes_detected}")
+            log_lines.append(f"Images unchanged: {max_images - changes_detected}")
+            log_lines.append("")
+            
+            if changes_detected == 0:
+                log_lines.append("✓ NO CHANGES DETECTED - PDFs are identical")
+            else:
+                log_lines.append(f"✗ {changes_detected} CHANGE(S) DETECTED")
+                log_lines.append("")
+                log_lines.append("Pages with changes are marked with ✗ above.")
+                log_lines.append("See the comparison PDF for visual representation.")
+            
+            log_lines.append("")
+            log_lines.append(f"Comparison Result PDF: {os.path.getsize(comparison_pdf):,} bytes")
+            log_lines.append(f"Log created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            print(f"[PDF Compare] Comparison PDF created: {comparison_pdf}")
+            print(f"[PDF Compare] PDF file size: {file_size} bytes")
+            print(f"[PDF Compare] Changes detected: {changes_detected}")
+            
+            # Write log file
+            with open(log_file_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(log_lines))
+            
+            print(f"[PDF Compare] Log file saved: {log_file_path}")
+            
+            # Generate report
+            report = {
+                "success": True,
+                "message": "PDF comparison completed successfully",
+                "details": {
+                    "pdf1": {
+                        "path": pdf1_path,
+                        "images_extracted": pdf1_img_count
+                    },
+                    "pdf2": {
+                        "path": pdf2_path,
+                        "images_extracted": pdf2_img_count
+                    },
+                    "changes": {
+                        "total_changes": changes_detected,
+                        "total_images": max_images
+                    },
+                    "comparison": {
+                        "result_pdf": comparison_pdf,
+                        "file_size": file_size,
+                        "log_file": log_file_path,
+                        "temp_directory": temp_dir
+                    }
+                }
+            }
+            
+            return report
+            
+        except Exception as e:
+            # Log the error
+            log_lines.append(f"ERROR: {str(e)}")
+            with open(log_file_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(log_lines))
+            
+            print(f"[PDF Compare] Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # Clean up on error
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return {
+                "success": False,
+                "error": f"Comparison failed: {str(e)}"
+            }
+    
+    except Exception as e:
+        print(f"[PDF Compare] Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}"
+        }
+
+
+
+
+def generate_html_report(pdf1_path, pdf2_path, comparison_data, output_html_path):
+    """
+    Generate an HTML report of the PDF comparison.
+    
+    Args:
+        pdf1_path (str): Path to first PDF
+        pdf2_path (str): Path to second PDF
+        comparison_data (dict): Comparison results dictionary
+        output_html_path (str): Path to save HTML report
+        
+    Returns:
+        dict: Result with success status and file path
+    """
+    try:
+        details = comparison_data.get('details', {})
+        pdf1_info = details.get('pdf1', {})
+        pdf2_info = details.get('pdf2', {})
+        comparison_info = details.get('comparison', {})
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Comparison Report</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%);
+            color: #e0e0e0;
+            line-height: 1.6;
+            padding: 20px;
+        }}
+        
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(20, 20, 40, 0.8);
+            border: 1px solid rgba(100, 200, 255, 0.2);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+        }}
+        
+        .header {{
+            background: linear-gradient(135deg, rgba(0, 150, 255, 0.2) 0%, rgba(0, 200, 150, 0.2) 100%);
+            border-bottom: 1px solid rgba(100, 200, 255, 0.3);
+            padding: 30px;
+        }}
+        
+        .header h1 {{
+            font-size: 2.5em;
+            background: linear-gradient(135deg, #00d4ff 0%, #00ff88 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }}
+        
+        .header p {{
+            color: #b0b0b0;
+            font-size: 0.95em;
+        }}
+        
+        .content {{
+            padding: 40px;
+        }}
+        
+        .info-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }}
+        
+        .info-card {{
+            background: linear-gradient(135deg, rgba(0, 100, 200, 0.1) 0%, rgba(0, 150, 150, 0.1) 100%);
+            border: 1px solid rgba(0, 200, 200, 0.2);
+            border-radius: 10px;
+            padding: 25px;
+            transition: all 0.3s ease;
+        }}
+        
+        .info-card:hover {{
+            background: linear-gradient(135deg, rgba(0, 150, 255, 0.15) 0%, rgba(0, 200, 200, 0.15) 100%);
+            border-color: rgba(0, 255, 200, 0.4);
+            box-shadow: 0 0 20px rgba(0, 255, 200, 0.1);
+        }}
+        
+        .info-card h3 {{
+            color: #00ffaa;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        
+        .info-card .label {{
+            color: #80b0ff;
+            font-weight: 600;
+            margin-top: 12px;
+            display: block;
+            font-size: 0.9em;
+        }}
+        
+        .info-card .value {{
+            color: #ffffff;
+            word-break: break-all;
+            margin-top: 5px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+            font-size: 0.95em;
+        }}
+        
+        .summary {{
+            background: linear-gradient(135deg, rgba(0, 200, 100, 0.1) 0%, rgba(0, 255, 150, 0.1) 100%);
+            border: 1px solid rgba(0, 255, 150, 0.2);
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }}
+        
+        .summary h2 {{
+            color: #00ff88;
+            margin-bottom: 15px;
+        }}
+        
+        .summary-item {{
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(0, 255, 150, 0.1);
+        }}
+        
+        .summary-item:last-child {{
+            border-bottom: none;
+        }}
+        
+        .summary-label {{
+            color: #80b0ff;
+            font-weight: 500;
+        }}
+        
+        .summary-value {{
+            color: #00ff88;
+            font-weight: 600;
+        }}
+        
+        .footer {{
+            background: rgba(0, 0, 0, 0.3);
+            border-top: 1px solid rgba(100, 200, 255, 0.2);
+            padding: 20px 40px;
+            text-align: center;
+            color: #80b0b0;
+            font-size: 0.9em;
+        }}
+        
+        .status-badge {{
+            display: inline-block;
+            background: linear-gradient(135deg, #00ff88 0%, #00ffaa 100%);
+            color: #000;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9em;
+        }}
+        
+        @media (max-width: 768px) {{
+            .info-grid {{
+                grid-template-columns: 1fr;
+            }}
+            
+            .header h1 {{
+                font-size: 1.8em;
+            }}
+            
+            .content {{
+                padding: 20px;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 PDF Comparison Report</h1>
+            <p>Comprehensive analysis of PDF differences</p>
+        </div>
+        
+        <div class="content">
+            <div class="summary">
+                <h2>✓ Comparison Summary</h2>
+                <div class="summary-item">
+                    <span class="summary-label">Status</span>
+                    <span class="status-badge">✓ Completed Successfully</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">Timestamp</span>
+                    <span class="summary-value">{timestamp}</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">PDF 1 Images</span>
+                    <span class="summary-value">{pdf1_info.get('images_extracted', 0)} extracted</span>
+                </div>
+                <div class="summary-item">
+                    <span class="summary-label">PDF 2 Images</span>
+                    <span class="summary-value">{pdf2_info.get('images_extracted', 0)} extracted</span>
+                </div>
+            </div>
+            
+            <div class="info-grid">
+                <div class="info-card">
+                    <h3>📄 PDF 1 (Original)</h3>
+                    <span class="label">File Path:</span>
+                    <div class="value">{pdf1_path}</div>
+                    <span class="label">Images Extracted:</span>
+                    <div class="value">{pdf1_info.get('images_extracted', 0)}</div>
+                </div>
+                
+                <div class="info-card">
+                    <h3>📄 PDF 2 (Comparison)</h3>
+                    <span class="label">File Path:</span>
+                    <div class="value">{pdf2_path}</div>
+                    <span class="label">Images Extracted:</span>
+                    <div class="value">{pdf2_info.get('images_extracted', 0)}</div>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <h3>🔍 Comparison Details</h3>
+                <span class="label">Result PDF:</span>
+                <div class="value">{comparison_info.get('result_pdf', 'N/A')}</div>
+                <span class="label">Temporary Directory:</span>
+                <div class="value">{comparison_info.get('temp_directory', 'N/A')}</div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Report generated by GUI Agent v2.0 PDF Comparison Tool</p>
+            <p style="margin-top: 10px; font-size: 0.85em;">© 2026 - Automated Documentation Engine</p>
+        </div>
+    </div>
+</body>
+</html>"""
+        
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_html_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        # Write HTML file
+        with open(output_html_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print(f"[PDF Compare] HTML report generated: {output_html_path}")
+        
+        return {
+            "success": True,
+            "html_path": output_html_path,
+            "size": os.path.getsize(output_html_path)
+        }
+    
+    except Exception as e:
+        print(f"[PDF Compare] Error generating HTML report: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def browse_directory(path="/"):
+    """
+    Browse directory structure and list files/folders.
+    Limited to user home directory for security.
+    
+    Args:
+        path (str): Directory path to browse
+        
+    Returns:
+        dict: Directory contents and metadata
+    """
+    try:
+        # Get user home directory
+        home = str(Path.home())
+        
+        # If path is empty or root, start from home
+        if path == "/" or path == "\\" or not path:
+            current_path = home
+        else:
+            # Normalize path
+            current_path = os.path.normpath(path)
+            
+            # Security: Only allow browsing within home directory
+            abs_current = os.path.abspath(current_path)
+            abs_home = os.path.abspath(home)
+            
+            if not abs_current.startswith(abs_home):
+                # Try to return to home if outside home directory
+                current_path = home
+        
+        if not os.path.exists(current_path):
+            current_path = home
+        
+        # Check if path is accessible
+        if not os.access(current_path, os.R_OK):
+            return {
+                "success": False,
+                "error": "Permission denied - cannot access this folder",
+                "current_path": current_path
+            }
+        
+        items = []
+        
+        try:
+            entries = sorted(os.listdir(current_path))
+        except PermissionError:
+            return {
+                "success": False,
+                "error": "Permission denied",
+                "current_path": current_path
+            }
+        
+        # Get parent path (but don't allow above home directory)
+        parent_path = os.path.dirname(current_path)
+        if not parent_path.startswith(os.path.abspath(home)):
+            parent_path = home
+        
+        for entry in entries:
+            try:
+                entry_path = os.path.join(current_path, entry)
+                
+                # Skip hidden files on Unix
+                if entry.startswith('.'):
+                    continue
+                
+                # Check if it's accessible
+                if not os.access(entry_path, os.R_OK):
+                    continue
+                
+                if os.path.isdir(entry_path):
+                    items.append({
+                        "name": entry,
+                        "type": "folder",
+                        "path": entry_path,
+                        "readable": True
+                    })
+                elif os.path.isfile(entry_path):
+                    # Show PDF files
+                    if entry.lower().endswith(('.pdf', '.exe', '.app', '.sh')):
+                        items.append({
+                            "name": entry,
+                            "type": "file",
+                            "path": entry_path,
+                            "readable": True
+                        })
+            except (PermissionError, OSError):
+                continue
+        
+        return {
+            "success": True,
+            "current_path": current_path,
+            "parent_path": parent_path,
+            "items": items
+        }
+    
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def get_comparison_images(comparison_dir):
+    """
+    Get images from comparison directory for web display.
+    
+    Args:
+        comparison_dir (str): Directory containing extracted images
+        
+    Returns:
+        dict: Organized image paths by page
+    """
+    try:
+        images = {}
+        
+        if not os.path.exists(comparison_dir):
+            return images
+        
+        # Organize images by page
+        for filename in sorted(os.listdir(comparison_dir)):
+            if filename.endswith(('.png', '.jpg', '.jpeg')):
+                path = os.path.join(comparison_dir, filename)
+                # Extract page number from filename
+                parts = filename.split('_')
+                page_num = parts[0].replace('page', '')
+                
+                if page_num not in images:
+                    images[page_num] = []
+                
+                images[page_num].append({
+                    "filename": filename,
+                    "path": path
+                })
+        
+        return images
+    
+    except Exception as e:
+        print(f"Error reading comparison images: {e}")
+        return {}
